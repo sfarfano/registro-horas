@@ -1,4 +1,11 @@
-es.xlsx")
+import streamlit as st
+import pandas as pd
+import io
+from datetime import date, datetime
+from streamlit_calendar import calendar
+
+# === LOGIN CON SESSION STATE ===
+df_login = pd.read_excel("colaboradores_pines.xlsx")
 colaboradores = df_login["Nombre del Colaborador"].tolist()
 administrador = "Soledad Farfán Ortiz"
 
@@ -47,7 +54,8 @@ else:
         st.stop()
 
     try:
-        df_existente = pd.read_csv("registro_horas.csv", parse_dates=["Fecha"], dayfirst=True)
+        df_existente = pd.read_csv("registro_horas.csv")
+        df_existente["Fecha"] = pd.to_datetime(df_existente["Fecha"], errors="coerce")
         if "ID" not in df_existente.columns:
             df_existente["ID"] = df_existente.index
         df_existente = df_existente.dropna(subset=["Fecha", "Nombre", "Centro de Costo", "Horas"])
@@ -108,11 +116,14 @@ else:
     st.markdown("---")
     st.subheader("📅 Calendario de horas registradas")
 
+    # Filtrar registros actuales
+    df_usuario = df_existente[df_existente["Nombre"] == usuario]
+
     eventos = []
-    for _, fila in df_existente[df_existente["Nombre"] == usuario].iterrows():
+    for _, fila in df_usuario.iterrows():
         eventos.append({
             "title": f"{fila['Centro de Costo']} ({fila['Horas']}h)",
-            "start": fila["Fecha"].strftime("%Y-%m-%d"),
+            "start": pd.to_datetime(fila["Fecha"]).strftime("%Y-%m-%d"),
             "color": "#34a853" if fila["Tipo de Hora"] == "Ordinaria" else "#ea4335"
         })
 
