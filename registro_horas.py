@@ -66,7 +66,7 @@ else:
     # === FORMULARIO DE REGISTRO ===
     if usuario != administrador:
         with st.form("registro_form"):
-            fecha = st.date_input("🗕 Fecha", value=date.today())
+            fecha = st.date_input("📅 Fecha", value=date.today(), format="%d/%m/%Y")
             tipo_hora = st.radio("🕒 Tipo de hora trabajada", ["Ordinaria", "Extra"], horizontal=True)
             horas = st.number_input("⏱ Horas trabajadas", min_value=0.5, max_value=12.0, step=0.5)
             proyecto = st.selectbox("🏗 Centro de costo / Proyecto", proyectos)
@@ -137,23 +137,26 @@ else:
 
     df_usuario = df_existente[df_existente["Nombre"] == usuario]
     if not df_usuario.empty:
+        df_usuario_mostrar = df_usuario.copy()
+        df_usuario_mostrar["Fecha_fmt"] = df_usuario_mostrar["Fecha"].dt.strftime("%d/%m/%Y")
+
         seleccion_id = st.selectbox(
             "Selecciona un registro para editar o eliminar",
             options=df_usuario["ID"],
-            format_func=lambda i: f"{df_usuario[df_usuario['ID'] == i]['Fecha'].dt.strftime('%d/%m/%Y').values[0]} - {df_usuario[df_usuario['ID'] == i]['Tipo de Hora'].values[0]} - {df_usuario[df_usuario['ID'] == i]['Centro de Costo'].values[0]} ({df_usuario[df_usuario['ID'] == i]['Horas'].values[0]}h)"
+            format_func=lambda i: f"{df_usuario_mostrar[df_usuario_mostrar['ID'] == i]['Fecha_fmt'].values[0]} - {df_usuario[df_usuario['ID'] == i]['Tipo de Hora'].values[0]} - {df_usuario[df_usuario['ID'] == i]['Centro de Costo'].values[0]} ({df_usuario[df_usuario['ID'] == i]['Horas'].values[0]}h)"
         )
 
         registro_sel = df_usuario[df_usuario["ID"] == seleccion_id].iloc[0]
 
         with st.form("editar_form"):
-            nueva_fecha = st.date_input("🗕 Fecha", value=registro_sel["Fecha"].date())
+            nueva_fecha = st.date_input("📅 Fecha", value=registro_sel["Fecha"].date(), format="%d/%m/%Y")
             nuevo_tipo = st.radio("🕒 Tipo de hora", ["Ordinaria", "Extra"], index=0 if registro_sel["Tipo de Hora"] == "Ordinaria" else 1)
             nuevas_horas = st.number_input("⏱ Horas trabajadas", min_value=0.5, max_value=12.0, step=0.5, value=registro_sel["Horas"])
             nuevo_proyecto = st.selectbox("🏗 Centro de costo / Proyecto", proyectos, index=proyectos.index(registro_sel["Centro de Costo"]))
             nuevo_comentario = st.text_area("📝 Comentario", value=registro_sel["Comentario"])
 
             col1, col2 = st.columns(2)
-            guardar = col1.form_submit_button("📏 Guardar cambios")
+            guardar = col1.form_submit_button("💾 Guardar cambios")
             eliminar = col2.form_submit_button("🗑 Eliminar registro")
 
         if guardar:
@@ -198,6 +201,7 @@ else:
             st.dataframe(resumen)
 
             detalle = df_mes.sort_values(by=["Centro de Costo", "Fecha"])
+            detalle["Fecha"] = detalle["Fecha"].dt.strftime("%d/%m/%Y")
             horas_por_cc = df_mes.groupby("Centro de Costo")["Horas"].sum().reset_index()
             prorrateo = df_mes.groupby("Nombre").agg(Total_Horas=("Horas", "sum")).reset_index()
             prorrateo = prorrateo.merge(df_valores, how="left", left_on="Nombre", right_on="Nombre del Colaborador")
