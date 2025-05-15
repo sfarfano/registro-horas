@@ -1,6 +1,0 @@
-streamlit
-pandas
-xlsxwriter
-openpyxl
-streamlit-calendar
-
