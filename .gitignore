@@ -1,0 +1,21 @@
+# Ignorar base de datos SQLite
+registro_horas.db
+respaldos_sqlite/
+
+# Ignorar archivos temporales
+*.pyc
+__pycache__/
+
+# Ignorar archivos de configuración locales (si los tuvieras)
+*.env
+*.ini
+
+# Ignorar archivos de Excel operativos o de usuarios
+*.xlsx
+
+# Ignorar backups automáticos
+*_backup_*.db
+
+# Ignorar directorios del sistema operativo
+.DS_Store
+Thumbs.db
