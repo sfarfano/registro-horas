@@ -1,0 +1,8 @@
+streamlit
+pandas
+openpyxl
+xlsxwriter
+streamlit-calendar
+mysql-connector-python
+
+
