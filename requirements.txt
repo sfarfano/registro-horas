@@ -1,0 +1,5 @@
+streamlit
+streamlit-calendar
+pandas
+openpyxl
+supabase
