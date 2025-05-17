@@ -65,7 +65,7 @@ def calcular_montos_por_cc(df_horas, df_sueldos):
     df = df_horas.merge(df_sueldos, how="left", left_on="nombre", right_on="Nombre")
     df["valor_hora"] = df["Sueldo líquido"] / 160
     df["monto"] = df["horas"] * df["valor_hora"]
-    return df.groupby("centro_costo")["monto"].sum().reset_index()
+    return df.groupby("centro_costo")["monto"].sum().reset_index(), df.groupby("nombre")["monto"].sum().reset_index(), df
 
 # === LOGIN ===
 if "autenticado" not in st.session_state:
@@ -121,7 +121,16 @@ else:
                 "start": row["fecha"],
                 "end": row["fecha"]
             }, axis=1).tolist()
-            calendar(events=eventos, options={"locale": "es", "initialView": "dayGridMonth", "height": 500}, key="calendario")
+            calendar(events=eventos, options={
+                "locale": "es",
+                "initialView": "listMonth",
+                "height": 600,
+                "headerToolbar": {
+                    "left": "prev,next today",
+                    "center": "title",
+                    "right": ""
+                }
+            }, key="calendario_vertical")
 
             st.subheader("✏️ Editar o eliminar registros")
             df = df.reset_index(drop=True)
@@ -153,19 +162,25 @@ else:
             df = df.sort_values(by="fecha", ascending=False)
             st.dataframe(df, use_container_width=True)
 
-            buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
-                df.to_excel(writer, sheet_name="Horas Registradas", index=False)
-                writer.close()
-            st.download_button("📥 Descargar Excel", data=buffer.getvalue(), file_name="reporte_horas.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
             st.subheader("📎 Cargar archivo de sueldos mensuales")
             archivo = st.file_uploader("Carga el archivo Excel de sueldos", type=[".xlsx"])
             if archivo:
                 df_sueldos = pd.read_excel(archivo)
                 st.success("✅ Archivo leído correctamente")
-                resumen = calcular_montos_por_cc(df, df_sueldos)
-                st.subheader("💰 Resumen por Centro de Costo")
-                st.dataframe(resumen)
+                cc, pers, cruzado = calcular_montos_por_cc(df, df_sueldos)
+
+                st.subheader("💰 Consolidado por Centro de Costo")
+                st.dataframe(cc)
+                st.subheader("👷‍♀️ Consolidado por Persona")
+                st.dataframe(pers)
+
+                buffer = io.BytesIO()
+                with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
+                    df.to_excel(writer, sheet_name="Detalle", index=False)
+                    cc.to_excel(writer, sheet_name="Consolidado_CC", index=False)
+                    pers.to_excel(writer, sheet_name="Consolidado_Persona", index=False)
+                    cruzado.to_excel(writer, sheet_name="Cruzado", index=False)
+                    writer.close()
+                st.download_button("📥 Descargar Excel Consolidado", data=buffer.getvalue(), file_name="reporte_horas.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         else:
             st.info("No hay datos registrados por los colaboradores.")
