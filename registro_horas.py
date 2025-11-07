@@ -23,19 +23,6 @@ from datetime import date, datetime
 from streamlit_calendar import calendar
 import io
 
-# === Flag de depuración y helper de logging silencioso ===
-DEBUG = st.secrets.get("app", {}).get("debug", False)
-IS_ADMIN = st.session_state.get("usuario") == "admin" if "usuario" in st.session_state else False
-
-def _log(msg, level="info"):
-    if DEBUG or IS_ADMIN:
-        # niveles válidos: info, warning, error, success, write, caption
-        if level == "caption":
-            st.caption(msg)
-        else:
-            getattr(st, level)(msg)
-
-
 # ⚙️ Config de página: debe ser el PRIMER comando de Streamlit
 st.set_page_config(page_title="Registro de Horas", layout="centered")
 
@@ -49,13 +36,12 @@ def _safe_strip(v: str) -> str:
 url = _safe_strip(url_raw)
 key = _safe_strip(key_raw)
 
-# Infos útiles (solo se muestran a admin o en debug)
-if DEBUG or IS_ADMIN:
-    st.caption(f"🔧 Supabase URL detectada: {url!r}")
-    try:
-        st.caption(f"🔧 Host: {urlparse(url).netloc!r}")
-    except Exception:
-        pass
+# Infos útiles (no mostramos la key)
+st.caption(f"🔧 Supabase URL detectada: {url!r}")
+try:
+    st.caption(f"🔧 Host: {urlparse(url).netloc!r}")
+except Exception:
+    pass
 
 # Validaciones básicas
 if not url or not key:
@@ -87,7 +73,6 @@ def _with_retries(fn, tries=3, delay=1.0, factor=2.0, on_error_msg="Error de con
 
 # Ping con diagnóstico detallado (DNS → HTTPS → consulta mínima)
 def supabase_ping_ok() -> bool:
-    """Ping con diagnóstico (DNS → HTTPS → SELECT). Detalles solo para admin/debug."""
     try:
         parsed = urlparse(url)
         host = parsed.netloc
@@ -95,43 +80,8 @@ def supabase_ping_ok() -> bool:
         path = parsed.path
 
         if scheme != "https":
-            _log(f"❌ URL debe empezar con https:// . Actual: {scheme!r}", "error")
+            st.error(f"❌ URL debe empezar con https:// . Actual: {scheme!r}")
             return False
-        if ".supabase.co" not in host:
-            _log(f"❌ Host inesperado en URL: {host!r} (debe contener .supabase.co)", "error")
-            return False
-        if path not in ("", "/"):
-            _log(f"ℹ️ La URL no debería incluir rutas. Elimina '{path}'.", "warning")
-
-        # DNS
-        try:
-            ip = socket.gethostbyname(host)
-            _log(f"🔎 DNS OK: {host} → {ip}", "info")
-        except Exception as e_dns:
-            _log(f"❌ Error de DNS: no se pudo resolver {host}. Detalle: {e_dns}", "error")
-            return False
-
-        # HTTPS health (no requiere token)
-        health_url = f"https://{host}/auth/v1/health"
-        try:
-            r = httpx.get(health_url, timeout=10.0)
-            _log(f"🌐 GET {health_url} → {r.status_code}", "info")
-        except Exception as e_http:
-            _log(f"❌ No se pudo abrir conexión HTTPS a {host}. Detalle: {type(e_http).__name__}: {e_http}", "error")
-            return False
-
-        # SELECT mínimo con el cliente
-        try:
-            supabase.table("registro_horas").select("id").limit(1).execute()
-            _log("✅ Conectividad a Supabase verificada.", "success")
-            return True
-        except Exception as e_exec:
-            _log(f"⚠️ Alcanzamos el host, pero falló la consulta: {type(e_exec).__name__}: {e_exec}", "error")
-            return False
-
-    except Exception as e:
-        _log(f"⚠️ Error de diagnóstico: {type(e).__name__}: {e}", "error")
-        return False
         if ".supabase.co" not in host:
             st.error(f"❌ Host inesperado en URL: {host!r} (debe contener .supabase.co)")
             return False
@@ -170,12 +120,6 @@ def supabase_ping_ok() -> bool:
 
 # =============================
 # === AQUI PEGA EL RESTO DE TU APP ===
-
-# --- Ping único por sesión (antes del flujo de login) ---
-if "supabase_ok" not in st.session_state:
-    st.session_state.supabase_ok = supabase_ping_ok()
-if not st.session_state.supabase_ok:
-    st.stop()
 # - Pega desde tus imports adicionales, funciones (cargar_proyectos, cargar_usuarios,
 #   cargar_registros, guardar_registro, actualizar_registro, eliminar_registro, etc.)
 # - Si ya tienes funciones con el mismo nombre, puedes conservar las tuyas, pero te
@@ -193,6 +137,29 @@ if not st.session_state.supabase_ok:
 #     st.rerun()
 
 
+
+# === Helper de reintentos para Supabase ===
+import time
+import contextlib
+
+def _with_retries(fn, tries=3, delay=1.0, factor=2.0, on_error_msg="Error de conexión con Supabase"):
+    last_exc = None
+    for i in range(tries):
+        try:
+            return fn()
+        except Exception as e:
+            last_exc = e
+            # httpx.ConnectError / Timeout, etc.
+            if i < tries - 1:
+                time.sleep(delay)
+                delay *= factor
+    # Si llegó aquí, falló
+    st.error(f"⚠️ {on_error_msg}. Detalle: {type(last_exc).__name__}")
+    # Opcional: mostrar más detalle solo si eres admin para no filtrar info sensible
+    with contextlib.suppress(Exception):
+        if st.session_state.get("usuario") == "admin":
+            st.info(str(last_exc))
+    return None
 
 
 # === CARGAR PROYECTOS ===
@@ -295,7 +262,10 @@ if not st.session_state.autenticado:
             if not cred_ok and not validacion_admin:
                 st.warning("🔐 PIN incorrecto.")
             else:
-                                st.session_state.autenticado = True
+                # Ping de conectividad antes de continuar
+                if not supabase_ping_ok():
+                    st.stop()
+                st.session_state.autenticado = True
                 st.session_state.usuario = "admin" if es_admin_seleccionado else usuario
                 st.rerun()
 
