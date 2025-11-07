@@ -36,13 +36,6 @@ def _safe_strip(v: str) -> str:
 url = _safe_strip(url_raw)
 key = _safe_strip(key_raw)
 
-# Infos útiles (no mostramos la key)
-st.caption(f"🔧 Supabase URL detectada: {url!r}")
-try:
-    st.caption(f"🔧 Host: {urlparse(url).netloc!r}")
-except Exception:
-    pass
-
 # Validaciones básicas
 if not url or not key:
     st.error("❌ No se encontraron las credenciales de Supabase en `st.secrets`. Revisa `[supabase] url` y `key`.")
@@ -71,55 +64,9 @@ def _with_retries(fn, tries=3, delay=1.0, factor=2.0, on_error_msg="Error de con
             st.info(str(last_exc))
     return None
 
-# Ping con diagnóstico detallado (DNS → HTTPS → consulta mínima)
-def supabase_ping_ok() -> bool:
-    try:
-        parsed = urlparse(url)
-        host = parsed.netloc
-        scheme = parsed.scheme
-        path = parsed.path
-
-        if scheme != "https":
-            st.error(f"❌ URL debe empezar con https:// . Actual: {scheme!r}")
-            return False
-        if ".supabase.co" not in host:
-            st.error(f"❌ Host inesperado en URL: {host!r} (debe contener .supabase.co)")
-            return False
-        if path not in ("", "/"):
-            st.warning(f"ℹ️ La URL no debería incluir rutas. Elimina '{path}'.")
-
-        # DNS
-        try:
-            ip = socket.gethostbyname(host)
-            st.info(f"🔎 DNS OK: {host} → {ip}")
-        except Exception as e_dns:
-            st.error(f"❌ Error de DNS: no se pudo resolver {host}. Detalle: {e_dns}")
-            return False
-
-        # HTTPS health (no requiere token)
-        health_url = f"https://{host}/auth/v1/health"
-        try:
-            r = httpx.get(health_url, timeout=10.0)
-            st.info(f"🌐 GET {health_url} → {r.status_code}")
-        except Exception as e_http:
-            st.error(f"❌ No se pudo abrir conexión HTTPS a {host}. Detalle: {type(e_http).__name__}: {e_http}")
-            return False
-
-        # SELECT mínimo con el cliente
-        try:
-            supabase.table("registro_horas").select("id").limit(1).execute()
-            st.success("✅ Conectividad a Supabase verificada.")
-            return True
-        except Exception as e_exec:
-            st.error(f"⚠️ Alcanzamos el host, pero falló la consulta: {type(e_exec).__name__}: {e_exec}")
-            return False
-
-    except Exception as e:
-        st.error(f"⚠️ Error de diagnóstico: {type(e).__name__}: {e}")
-        return False
-
 # =============================
 # === AQUI PEGA EL RESTO DE TU APP ===
+
 # - Pega desde tus imports adicionales, funciones (cargar_proyectos, cargar_usuarios,
 #   cargar_registros, guardar_registro, actualizar_registro, eliminar_registro, etc.)
 # - Si ya tienes funciones con el mismo nombre, puedes conservar las tuyas, pero te
@@ -129,117 +76,6 @@ def supabase_ping_ok() -> bool:
 
 # EJEMPLO de uso en login (ponlo donde corresponda en tu flujo):
 # if acceder:
-#     ... validación de PIN ...
-#     if not supabase_ping_ok():
-#         st.stop()
-#     st.session_state.autenticado = True
-#     st.session_state.usuario = usuario
-#     st.rerun()
-
-
-
-# === Helper de reintentos para Supabase ===
-import time
-import contextlib
-
-def _with_retries(fn, tries=3, delay=1.0, factor=2.0, on_error_msg="Error de conexión con Supabase"):
-    last_exc = None
-    for i in range(tries):
-        try:
-            return fn()
-        except Exception as e:
-            last_exc = e
-            # httpx.ConnectError / Timeout, etc.
-            if i < tries - 1:
-                time.sleep(delay)
-                delay *= factor
-    # Si llegó aquí, falló
-    st.error(f"⚠️ {on_error_msg}. Detalle: {type(last_exc).__name__}")
-    # Opcional: mostrar más detalle solo si eres admin para no filtrar info sensible
-    with contextlib.suppress(Exception):
-        if st.session_state.get("usuario") == "admin":
-            st.info(str(last_exc))
-    return None
-
-
-# === CARGAR PROYECTOS ===
-def cargar_proyectos():
-    try:
-        df = pd.read_excel("Listado de proyectos vigentes.xlsx", header=None)
-        return df.iloc[:, 0].dropna().tolist()
-    except:
-        return []
-
-# === CARGAR USUARIOS ===
-def cargar_usuarios():
-    df = pd.read_excel("colaboradores_pines.xlsx")
-    lista = df["Nombre del Colaborador"].tolist()
-    lista = [x for x in lista if x != "Soledad Farfán Ortiz"]
-    lista.insert(0, "admin")
-    return lista, df
-
-# === CARGAR REGISTROS ===
-def cargar_registros(usuario=None):
-    query = supabase.table("registro_horas")
-    def _run():
-        if usuario == "admin":
-            return query.select("*").execute()
-        else:
-            return query.select("*").eq("nombre", usuario).execute()
-    data = _with_retries(_run, on_error_msg="No se pudo consultar la tabla 'registro_horas'")
-    return pd.DataFrame(data.data) if data else pd.DataFrame()
-
-def guardar_registro(data):
-    fields = ["nombre", "fecha", "tipo_hora", "horas", "centro_costo", "comentario", "monto_pagar"]
-    record = dict(zip(fields, data))
-    res = _with_retries(lambda: supabase.table("registro_horas").insert(record).execute(),
-                        on_error_msg="No se pudo insertar el registro")
-    if res:
-        st.success("✅ Registro guardado exitosamente")
-
-def actualizar_registro(data):
-    (fecha, tipo_hora, horas, centro_costo, comentario, monto_pagar, registro_id) = data
-    res = _with_retries(lambda: supabase.table("registro_horas").update({
-        "fecha": fecha,
-        "tipo_hora": tipo_hora,
-        "horas": horas,
-        "centro_costo": centro_costo,
-        "comentario": comentario,
-        "monto_pagar": monto_pagar
-    }).eq("id", registro_id).execute(), on_error_msg="No se pudo actualizar el registro")
-    if res:
-        st.success("✅ Registro actualizado.")
-
-def eliminar_registro(registro_id):
-    res = _with_retries(lambda: supabase.table("registro_horas").delete().eq("id", registro_id).execute(),
-                        on_error_msg="No se pudo eliminar el registro")
-    if res:
-        st.warning("🗑 Registro eliminado.")
-
-# === CALCULAR MONTOS POR CENTRO DE COSTO ===
-def calcular_montos_por_cc(df_horas, df_sueldos):
-    df_sueldos["Nombre"] = df_sueldos["Nombre"].str.strip()
-    df = df_horas.merge(df_sueldos, how="left", left_on="nombre", right_on="Nombre")
-    df["valor_hora"] = df["Sueldo líquido"] / 160
-    df["monto"] = df["horas"] * df["valor_hora"]
-    return df.groupby("centro_costo")["monto"].sum().reset_index(), df.groupby("nombre")["monto"].sum().reset_index(), df
-
-# === LOGIN ===
-if "autenticado" not in st.session_state:
-    st.session_state.autenticado = False
-    st.session_state.usuario = ""
-
-# --- PANTALLA DE LOGIN ---
-if not st.session_state.autenticado:
-    st.title("🔐 Registro de Horas - CFC INGENIERIA")
-    usuarios, df_login = cargar_usuarios()
-
-    with st.form("login_form"):
-        usuario = st.selectbox("Selecciona tu nombre", usuarios)
-        pin = st.text_input("Ingresa tu PIN", type="password")
-        acceder = st.form_submit_button("Acceder")
-
-    if acceder:
         # Validación segura del PIN
         pin_str = pin.strip()
         if not pin_str.isdigit():
@@ -262,9 +98,6 @@ if not st.session_state.autenticado:
             if not cred_ok and not validacion_admin:
                 st.warning("🔐 PIN incorrecto.")
             else:
-                # Ping de conectividad antes de continuar
-                if not supabase_ping_ok():
-                    st.stop()
                 st.session_state.autenticado = True
                 st.session_state.usuario = "admin" if es_admin_seleccionado else usuario
                 st.rerun()
