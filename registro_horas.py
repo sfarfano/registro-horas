@@ -18,6 +18,13 @@ import socket
 import httpx
 import time
 import contextlib
+import pandas as pd
+from datetime import date, datetime
+from streamlit_calendar import calendar
+import io
+
+# ⚙️ Config de página: debe ser el PRIMER comando de Streamlit
+st.set_page_config(page_title="Registro de Horas", layout="centered")
 
 # === Lee y normaliza secrets ===
 url_raw = st.secrets.get("supabase", {}).get("url", "")
@@ -222,8 +229,7 @@ if "autenticado" not in st.session_state:
     st.session_state.autenticado = False
     st.session_state.usuario = ""
 
-st.set_page_config(page_title="Registro de Horas", layout="centered")
-
+# --- PANTALLA DE LOGIN ---
 if not st.session_state.autenticado:
     st.title("🔐 Registro de Horas - CFC INGENIERIA")
     usuarios, df_login = cargar_usuarios()
@@ -234,16 +240,12 @@ if not st.session_state.autenticado:
         acceder = st.form_submit_button("Acceder")
 
     if acceder:
-        # 1) Validación segura del PIN (evita int(pin) cuando viene vacío o con letras)
+        # Validación segura del PIN
         pin_str = pin.strip()
         if not pin_str.isdigit():
             st.warning("🔐 PIN inválido.")
         else:
             pin_int = int(pin_str)
-
-            # 2) Reglas de validación
-            #    - usuario normal: debe existir coincidencia exacta nombre + PIN
-            #    - admin: se valida contra el registro de 'Soledad Farfán Ortiz'
             es_admin_seleccionado = (usuario == "admin")
             validacion_admin = (
                 es_admin_seleccionado and
@@ -260,29 +262,37 @@ if not st.session_state.autenticado:
             if not cred_ok and not validacion_admin:
                 st.warning("🔐 PIN incorrecto.")
             else:
-                # 3) Comprobación de conectividad con Supabase antes de continuar
+                # Ping de conectividad antes de continuar
                 if not supabase_ping_ok():
-                    # Si no hay conectividad, detenemos el flujo de login sin romper la app
                     st.stop()
-
-                # 4) Login OK
                 st.session_state.autenticado = True
                 st.session_state.usuario = "admin" if es_admin_seleccionado else usuario
                 st.rerun()
 
+# --- APP AUTENTICADA ---
+else:
+    usuario = st.session_state.usuario
+    nombre_mostrar = "Soledad Farfán Ortiz" if usuario == "admin" else usuario
+
+    st.title("🕒 Registro de Horas - Supabase")
+    st.success(f"Bienvenido, {nombre_mostrar}")
+    if st.button("🔓 Cerrar sesión"):
+        st.session_state.autenticado = False
+        st.session_state.usuario = ""
+        st.rerun()
 
     if usuario != "admin":
         with st.form("registro_form"):
-            fecha = st.date_input("📅 Fecha", value=date.today())
-            tipo = st.radio("🕒 Tipo de Hora", ["Ordinaria", "Extra"], horizontal=True)
-            horas = st.number_input("⏱ Horas trabajadas", 0.5, 12.0, 0.5)
-            proyecto = st.selectbox("🏗 Centro de Costo", cargar_proyectos())
-            comentario = st.text_area("📝 Comentario")
+            f_fecha = st.date_input("📅 Fecha", value=date.today())
+            f_tipo = st.radio("🕒 Tipo de Hora", ["Ordinaria", "Extra"], horizontal=True)
+            f_horas = st.number_input("⏱ Horas trabajadas", 0.5, 12.0, 0.5)
+            f_proyecto = st.selectbox("🏗 Centro de Costo", cargar_proyectos())
+            f_comentario = st.text_area("📝 Comentario")
             enviar = st.form_submit_button("Registrar hora")
 
             if enviar:
-                monto = int(horas * 4500) if tipo == "Extra" else 0
-                guardar_registro((nombre_mostrar, fecha.isoformat(), tipo, horas, proyecto, comentario, monto))
+                monto = int(f_horas * 4500) if f_tipo == "Extra" else 0
+                guardar_registro((nombre_mostrar, f_fecha.isoformat(), f_tipo, f_horas, f_proyecto, f_comentario, monto))
 
         df = cargar_registros(usuario)
         if not df.empty:
@@ -307,24 +317,26 @@ if not st.session_state.autenticado:
             df = df.reset_index(drop=True)
             registro = st.selectbox("Selecciona un registro", df.index)
             with st.form("editar_form"):
-                fecha = st.date_input("Fecha", value=pd.to_datetime(df.loc[registro, "fecha"]))
-                tipo = st.radio("Tipo de Hora", ["Ordinaria", "Extra"], index=0 if df.loc[registro, "tipo_hora"] == "Ordinaria" else 1, horizontal=True)
-                horas = st.number_input("Horas trabajadas", 0.5, 12.0, float(df.loc[registro, "horas"]))
-                proyecto = st.selectbox("Centro de Costo", cargar_proyectos(), index=cargar_proyectos().index(df.loc[registro, "centro_costo"]))
-                comentario = st.text_area("Comentario", df.loc[registro, "comentario"])
+                e_fecha = st.date_input("Fecha", value=pd.to_datetime(df.loc[registro, "fecha"]))
+                e_tipo = st.radio("Tipo de Hora", ["Ordinaria", "Extra"], index=0 if df.loc[registro, "tipo_hora"] == "Ordinaria" else 1, horizontal=True)
+                e_horas = st.number_input("Horas trabajadas", 0.5, 12.0, float(df.loc[registro, "horas"]))
+                proyectos_lista = cargar_proyectos()
+                e_proyecto = st.selectbox("Centro de Costo", proyectos_lista, index=proyectos_lista.index(df.loc[registro, "centro_costo"]))
+                e_comentario = st.text_area("Comentario", df.loc[registro, "comentario"])
                 registro_id = df.loc[registro, "id"]
                 guardar = st.form_submit_button("Actualizar")
                 eliminar = st.form_submit_button("Eliminar")
 
                 if guardar:
-                    monto = int(horas * 4500) if tipo == "Extra" else 0
-                    actualizar_registro((fecha.isoformat(), tipo, horas, proyecto, comentario, monto, registro_id))
+                    monto = int(e_horas * 4500) if e_tipo == "Extra" else 0
+                    actualizar_registro((e_fecha.isoformat(), e_tipo, e_horas, e_proyecto, e_comentario, monto, registro_id))
                     st.rerun()
                 if eliminar:
                     eliminar_registro(registro_id)
                     st.rerun()
         else:
             st.info("No hay registros para mostrar.")
+
     else:
         st.subheader("📊 Reporte General")
         df = cargar_registros("admin")
@@ -351,9 +363,6 @@ if not st.session_state.autenticado:
                     cc.to_excel(writer, sheet_name="Consolidado_CC", index=False)
                     pers.to_excel(writer, sheet_name="Consolidado_Persona", index=False)
                     cruzado.to_excel(writer, sheet_name="Cruzado", index=False)
-                    writer.close()
                 st.download_button("📥 Descargar Excel Consolidado", data=buffer.getvalue(), file_name="reporte_horas.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         else:
             st.info("No hay datos registrados por los colaboradores.")
-
-
