@@ -1,18 +1,27 @@
-# migrar_app.py con Supabase Client
+# -*- coding: utf-8 -*-
+"""
+Registro de Horas – versión con diagnóstico de Supabase
+------------------------------------------------------
+1) Pega aquí tu código completo de la app, pero deja SIN CAMBIOS la sección de
+   configuración y diagnóstico que viene abajo (ayuda a detectar el ConnectError).
+2) Completa donde dice  # === AQUI PEGA EL RESTO DE TU APP ===
+3) Si ya tienes funciones duplicadas, elimina las repetidas y conserva estas utilidades.
+"""
+
+# =============================
+# CONFIGURACIÓN + DIAGNÓSTICO
+# =============================
 import streamlit as st
 from supabase import create_client, Client
-import pandas as pd
-from datetime import date, datetime
-from streamlit_calendar import calendar
-import io
-import base64
+from urllib.parse import urlparse
+import socket
+import httpx
+import time
+import contextlib
 
-# === CONFIGURACIÓN SUPABASE ===
+# === Lee y normaliza secrets ===
 url_raw = st.secrets.get("supabase", {}).get("url", "")
 key_raw = st.secrets.get("supabase", {}).get("key", "")
-
-st.caption(f"🔧 Supabase URL detectada: {url!r}")
-st.caption(f"🔧 Host: {urlparse(url).netloc!r}")
 
 def _safe_strip(v: str) -> str:
     return v.strip().rstrip("/") if isinstance(v, str) else ""
@@ -20,36 +29,49 @@ def _safe_strip(v: str) -> str:
 url = _safe_strip(url_raw)
 key = _safe_strip(key_raw)
 
+# Infos útiles (no mostramos la key)
+st.caption(f"🔧 Supabase URL detectada: {url!r}")
+try:
+    st.caption(f"🔧 Host: {urlparse(url).netloc!r}")
+except Exception:
+    pass
+
+# Validaciones básicas
 if not url or not key:
     st.error("❌ No se encontraron las credenciales de Supabase en `st.secrets`. Revisa `[supabase] url` y `key`.")
     st.stop()
-
 if not url.startswith("https://") or ".supabase.co" not in url:
-    st.error(f"❌ URL de Supabase con formato inesperado: {url!r}. Debe ser 'https://<project>.supabase.co'.")
+    st.error(f"❌ URL de Supabase con formato inesperado: {url!r}. Debe ser 'https://<project>.supabase.co' (sin rutas).")
     st.stop()
 
-from supabase import create_client, Client
+# Crea cliente
 supabase: Client = create_client(url, key)
 
-from urllib.parse import urlparse
-import socket
-import httpx
+# Helper de reintentos (para todas las llamadas a Supabase)
+def _with_retries(fn, tries=3, delay=1.0, factor=2.0, on_error_msg="Error de conexión con Supabase"):
+    last_exc = None
+    for i in range(tries):
+        try:
+            return fn()
+        except Exception as e:
+            last_exc = e
+            if i < tries - 1:
+                time.sleep(delay)
+                delay *= factor
+    st.error(f"⚠️ {on_error_msg}. Detalle: {type(last_exc).__name__}")
+    with contextlib.suppress(Exception):
+        if st.session_state.get("usuario") == "admin":
+            st.info(str(last_exc))
+    return None
 
+# Ping con diagnóstico detallado (DNS → HTTPS → consulta mínima)
 def supabase_ping_ok() -> bool:
-    """
-    Diagnóstico de conectividad hacia Supabase:
-    - Valida el formato de URL
-    - Resuelve DNS
-    - Prueba TLS/HTTP hacia /auth/v1/health (no requiere token)
-    - Si todo ok, hace un select mínimo con el cliente
-    """
     try:
         parsed = urlparse(url)
         host = parsed.netloc
         scheme = parsed.scheme
         path = parsed.path
 
-        # 1) Validación básica de URL
         if scheme != "https":
             st.error(f"❌ URL debe empezar con https:// . Actual: {scheme!r}")
             return False
@@ -58,9 +80,8 @@ def supabase_ping_ok() -> bool:
             return False
         if path not in ("", "/"):
             st.warning(f"ℹ️ La URL no debería incluir rutas. Elimina '{path}'.")
-            # seguimos, pero avisamos
 
-        # 2) DNS
+        # DNS
         try:
             ip = socket.gethostbyname(host)
             st.info(f"🔎 DNS OK: {host} → {ip}")
@@ -68,17 +89,16 @@ def supabase_ping_ok() -> bool:
             st.error(f"❌ Error de DNS: no se pudo resolver {host}. Detalle: {e_dns}")
             return False
 
-        # 3) Salud de Auth (no requiere token). Sirve para probar TLS/HTTP rápidamente.
+        # HTTPS health (no requiere token)
         health_url = f"https://{host}/auth/v1/health"
         try:
             r = httpx.get(health_url, timeout=10.0)
             st.info(f"🌐 GET {health_url} → {r.status_code}")
-            # 200 es OK, 404/405 podrían aparecer si cambió algo, pero al menos hay respuesta TLS/HTTP
         except Exception as e_http:
             st.error(f"❌ No se pudo abrir conexión HTTPS a {host}. Detalle: {type(e_http).__name__}: {e_http}")
             return False
 
-        # 4) Select mínimo con el cliente de Supabase (requiere URL y KEY correctas)
+        # SELECT mínimo con el cliente
         try:
             supabase.table("registro_horas").select("id").limit(1).execute()
             st.success("✅ Conectividad a Supabase verificada.")
@@ -90,6 +110,25 @@ def supabase_ping_ok() -> bool:
     except Exception as e:
         st.error(f"⚠️ Error de diagnóstico: {type(e).__name__}: {e}")
         return False
+
+# =============================
+# === AQUI PEGA EL RESTO DE TU APP ===
+# - Pega desde tus imports adicionales, funciones (cargar_proyectos, cargar_usuarios,
+#   cargar_registros, guardar_registro, actualizar_registro, eliminar_registro, etc.)
+# - Si ya tienes funciones con el mismo nombre, puedes conservar las tuyas, pero te
+#   recomiendo envolver las llamadas a Supabase con `_with_retries(...)`.
+# - En el bloque de login, antes de continuar, llama a `if not supabase_ping_ok(): st.stop()`
+# - Si ya tienes calendario y reportes, puedes dejar todo igual.
+
+# EJEMPLO de uso en login (ponlo donde corresponda en tu flujo):
+# if acceder:
+#     ... validación de PIN ...
+#     if not supabase_ping_ok():
+#         st.stop()
+#     st.session_state.autenticado = True
+#     st.session_state.usuario = usuario
+#     st.rerun()
+
 
 
 # === Helper de reintentos para Supabase ===
@@ -316,4 +355,5 @@ if not st.session_state.autenticado:
                 st.download_button("📥 Descargar Excel Consolidado", data=buffer.getvalue(), file_name="reporte_horas.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         else:
             st.info("No hay datos registrados por los colaboradores.")
+
 
