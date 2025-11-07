@@ -11,6 +11,9 @@ import base64
 url_raw = st.secrets.get("supabase", {}).get("url", "")
 key_raw = st.secrets.get("supabase", {}).get("key", "")
 
+st.caption(f"🔧 Supabase URL detectada: {url!r}")
+st.caption(f"🔧 Host: {urlparse(url).netloc!r}")
+
 def _safe_strip(v: str) -> str:
     return v.strip().rstrip("/") if isinstance(v, str) else ""
 
@@ -28,14 +31,66 @@ if not url.startswith("https://") or ".supabase.co" not in url:
 from supabase import create_client, Client
 supabase: Client = create_client(url, key)
 
+from urllib.parse import urlparse
+import socket
+import httpx
+
 def supabase_ping_ok() -> bool:
-    """Hace un select mínimo para verificar conectividad con Supabase."""
+    """
+    Diagnóstico de conectividad hacia Supabase:
+    - Valida el formato de URL
+    - Resuelve DNS
+    - Prueba TLS/HTTP hacia /auth/v1/health (no requiere token)
+    - Si todo ok, hace un select mínimo con el cliente
+    """
     try:
-        supabase.table("registro_horas").select("id").limit(1).execute()
-        return True
+        parsed = urlparse(url)
+        host = parsed.netloc
+        scheme = parsed.scheme
+        path = parsed.path
+
+        # 1) Validación básica de URL
+        if scheme != "https":
+            st.error(f"❌ URL debe empezar con https:// . Actual: {scheme!r}")
+            return False
+        if ".supabase.co" not in host:
+            st.error(f"❌ Host inesperado en URL: {host!r} (debe contener .supabase.co)")
+            return False
+        if path not in ("", "/"):
+            st.warning(f"ℹ️ La URL no debería incluir rutas. Elimina '{path}'.")
+            # seguimos, pero avisamos
+
+        # 2) DNS
+        try:
+            ip = socket.gethostbyname(host)
+            st.info(f"🔎 DNS OK: {host} → {ip}")
+        except Exception as e_dns:
+            st.error(f"❌ Error de DNS: no se pudo resolver {host}. Detalle: {e_dns}")
+            return False
+
+        # 3) Salud de Auth (no requiere token). Sirve para probar TLS/HTTP rápidamente.
+        health_url = f"https://{host}/auth/v1/health"
+        try:
+            r = httpx.get(health_url, timeout=10.0)
+            st.info(f"🌐 GET {health_url} → {r.status_code}")
+            # 200 es OK, 404/405 podrían aparecer si cambió algo, pero al menos hay respuesta TLS/HTTP
+        except Exception as e_http:
+            st.error(f"❌ No se pudo abrir conexión HTTPS a {host}. Detalle: {type(e_http).__name__}: {e_http}")
+            return False
+
+        # 4) Select mínimo con el cliente de Supabase (requiere URL y KEY correctas)
+        try:
+            supabase.table("registro_horas").select("id").limit(1).execute()
+            st.success("✅ Conectividad a Supabase verificada.")
+            return True
+        except Exception as e_exec:
+            st.error(f"⚠️ Alcanzamos el host, pero falló la consulta: {type(e_exec).__name__}: {e_exec}")
+            return False
+
     except Exception as e:
-        st.error(f"⚠️ No fue posible alcanzar Supabase. Detalle: {type(e).__name__}")
+        st.error(f"⚠️ Error de diagnóstico: {type(e).__name__}: {e}")
         return False
+
 
 # === Helper de reintentos para Supabase ===
 import time
@@ -261,3 +316,4 @@ if not st.session_state.autenticado:
                 st.download_button("📥 Descargar Excel Consolidado", data=buffer.getvalue(), file_name="reporte_horas.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         else:
             st.info("No hay datos registrados por los colaboradores.")
+
